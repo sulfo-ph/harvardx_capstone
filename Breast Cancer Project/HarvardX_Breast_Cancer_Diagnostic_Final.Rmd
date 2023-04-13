@@ -1,0 +1,321 @@
+---
+title: "HarvardX Capstone 2 Predicting Breast Cancer Diagnostic"
+author: "Raphael Oliveira Abreu"
+date: "2023-04-05"
+output:
+  pdf_document: default
+  word_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r download and loading basic required packages, include = FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+library(caret)
+```
+
+
+# Introduction
+
+This paper will analyze and use machine learning methods to predict cancer diagnostics for the Wisconsin Diagnostic Breast Cancer (WDBC) dataset from 1995. The data set is a collaboration between two Computer Sciences Professors and on Doctor from the General Surgery Department.
+
+The first section will analyse the dataset and its variables. The following section will detail the methods of machine learning and how to evaluate their outcomes. The third and final section will present the conclusions to this project.
+
+```{r Downloading the dataset, include = FALSE}
+temp <- tempfile(fileext = ".csv")
+download.file("https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data", temp, mode = "wb")
+colnames <- c("id","diagnosis","radius_mean","texture_mean","perimeter_mean","area_mean","smoothness_mean","compactness_mean","concavity_mean","concave_points_mean","symmetry_mean","fractal_dimension_mean","radius_se","texture_se","perimeter_se","area_se","smoothness_se","compactness_se","concavity_se","concave_points_se","symmetry_se","fractal_dimension_se","radius_worst","texture_worst","perimeter_worst","area_worst","smoothness_worst","compactness_worst","concavity_worst","concave_points_worst","symmetry_worst","fractal_dimension_worst")
+bcwdt <- read.csv(temp, col.names = colnames)
+bcwdt
+```
+
+# Analysis
+
+The dataset contains 32 variables which are the following, according to [data description](https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.names):
+
+* ID number
+* Diagnosis (M = malignant, B = benign)
+* And the mean, standard error and worst  or largest (mean of the three largest values) for the measures:
+	a) radius (mean of distances from center to points on the perimeter)
+	b) texture (standard deviation of gray-scale values)
+	c) perimeter
+	d) area
+	e) smoothness (local variation in radius lengths)
+	f) compactness (perimeter^2 / area - 1.0)
+	g) concavity (severity of concave portions of the contour)
+	h) concave points (number of concave portions of the contour)
+	i) symmetry 
+	j) fractal dimension ("coastline approximation" - 1)
+
+Here are the 12 first variables of the 5 first observations in table format:
+
+```{r analysis intro, echo=FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+bcwdt[,1:7] %>% head() %>% knitr::kable()
+```
+For illustrative purposes on how the whole 32 variables behave here is the print of using function glimpse on the dataset.
+
+```{r glimpse of the dataset, echo = FALSE}
+bcwdt %>% glimpse()
+```
+
+The dataset contains 0 duplicated rows and no missing values.
+
+```{r duplicated observations and missing values, include = FALSE, echo = FALSE}
+sum(duplicated(bcwdt))
+sum(is.na(bcwdt))
+```
+
+The most meaningful variable is the one this project will try to predict: cancer diagnostic. The distribution of the outcomes to this variable can be seen in both the table and bar chart bellow.
+
+```{r table of proportions between diagnosis, echo = FALSE}
+bcwdt_m <- bcwdt %>% 
+  mutate(diagnosis = case_when(diagnosis == "B" ~ "Benign",
+                              diagnosis == "M" ~ "Malignant"))
+tab <- prop.table(table(bcwdt_m$diagnosis))
+
+df <- data.frame(Diagnosis = names(tab), Proportion = paste(sprintf("%.2f%%", as.numeric(tab)*100)))
+df %>% knitr::kable()
+```
+
+
+```{r barplot of the caount of benign and malignant tumors, echo = FALSE, message = FALSE, warning = FALSE}
+select(bcwdt, -id) %>%
+  mutate(diagnosis = case_when(diagnosis == "B" ~ "Benign",
+                              diagnosis == "M" ~ "Malignant")) %>% 
+  ggplot(aes(diagnosis)) +
+  geom_bar() + 
+  stat_count(geom = "text", colour = "white", size = 3.5,
+  aes(label = ..count..),position=position_stack(vjust=0.5))
+  
+```
+
+# Method and Results
+
+## Accuracy, Sensitivity and Specificity
+
+Three metrics will be analyzed in this project to verify how good such prediction method is. They are: Accuracy, sensitivity and specificity.
+They can be better understood with the assistance of prediction against actual results table.
+
+```{r prediction x actual results table, echo = FALSE}
+pred_table <- data.frame(Predicted = c("", "Predicted Positive", "Predicted Negative"),
+                         Act_Positive = c("Actually Positive", "True Positives (TP)", "False Negative (FN)"),
+                         Act_Negative = c("Actually Negative", "False Positive (FP)", "True Negative (TN)")
+)
+names(pred_table) <- NULL
+pred_table %>% knitr::kable()
+```
+
+
+Accuracy can be defined as the numerical value of accuracy represents the proportion of true positive results (both true positive and true negative) in the selected population.
+
+$$Accuracy = \frac{TP + TN}{TP + TN + FP + FN}$$
+
+Sensitivity is typically quantified by true positives divided by the sum of true positives plus false negatives, or the proportion of actual positives. This can be also referred to as true positive rate or recall.
+
+$$Sensitivity = \frac{TP}{TP + FN}$$
+
+Specificity is typically quantified as the true negatives divided by the sum of the two negatives plus the false positives, or the proportions of negatives,  This quantity is also called the true negative rate. 
+
+$$Specificity = \frac{TN}{TN + FP}$$
+
+Specificity can also be written as the proportion of true positives divided by the sum of the true positives plus false positives, or the proportion of outcomes called positives.
+
+$$Specificity = \frac{TP}{TP + FP}$$
+
+This metric is also referred to as precision, and also as the positive predictive value, PPV.
+
+## Prediction Models
+
+Three models will be shown here: Logistic Regression, Classification (decision) Tree and K-Nearest Neighbors.
+
+
+### Logistic Regression
+
+Logistic regression an extension of linear regression that assures us the estimate of the conditional probability is, in fact, between 0 and 1. This is great when applied to categorical data.
+
+```{r creating train_set and test_set, echo = FALSE, warning = FALSE}
+#mutating the dataset diagnosis variable
+bcwdt_m <- bcwdt %>% 
+  mutate(diagnosis = case_when(diagnosis == "B" ~ 0,
+                               diagnosis == "M" ~ 1)) %>%
+  select(-id)
+bcwdt_m$diagnosis <- as.factor(bcwdt_m$diagnosis)
+set.seed(1, sample.kind = "Rounding") # if using R 3.5 or earlier, remove the sample.kind argument
+test_index <- createDataPartition(as.factor(bcwdt_m$diagnosis), times = 1, p = 0.2, list = FALSE)
+train_set <- bcwdt_m[-test_index, ]
+test_set <- bcwdt_m[test_index, ]
+```
+
+
+```{r logistic regression, echo = TRUE, warning = FALSE}
+#logistic regression for prediction
+glm_fit <- glm(diagnosis ~ ., train_set, family = "binomial")
+p_hat_logit <- predict(glm_fit, test_set, type = "response")
+y_hat_logit <- ifelse(p_hat_logit > 0.5, 1, 0) %>% factor()
+test_set$diagnosis <- as.factor(test_set$diagnosis)
+#confusion matrix of the lm method
+cm_glm <- confusionMatrix(y_hat_logit, test_set$diagnosis)
+#extracting accuracy, sensitivity and specificity
+accuracy_glm <- cm_glm$overall[["Accuracy"]]
+sensitivity_glm <- cm_glm$byClass[["Sensitivity"]]
+specificity_glm <- cm_glm$byClass[["Specificity"]]
+```
+
+```{r logistic regression results table, echo = TRUE, warning = FALSE}
+#table for results
+results_table <- data.frame(Method = "Logistic Regression", 
+                            Accuracy = accuracy_glm, 
+                            Sensitivity = sensitivity_glm,
+                            Specificity = specificity_glm)
+results_table %>% knitr::kable()
+```
+
+```{r linear regression, echo = FALSE, warning = FALSE}
+#linear regression for prediction
+lm_fit <- lm(diagnosis ~ ., train_set)
+p_hat <- predict(lm_fit, test_set)
+y_hat <- ifelse(p_hat > 0.5, "1", "0") %>% factor()
+test_set$diagnosis <- as.factor(test_set$diagnosis)
+#confusion matrix of the lm method
+cm_lm <- confusionMatrix(y_hat, test_set$diagnosis)
+#extracting accuracy, sensitivity and specificity
+accuracy_lm <- cm_lm$overall[["Accuracy"]]
+sensitivity_lm <- cm_lm$byClass[["Sensitivity"]]
+specificity_lm <- cm_lm$byClass[["Specificity"]]
+```
+
+For comparison, when the data is inserted into a linear regression, the line format is too strict to the behavior of the many variables present in the dataset. It produces an accuracy of just `r accuracy_lm`, a low sensitivity of `r sensitivity_lm` and a specificity of `r specificity_lm`. 
+
+### Classification (Decision) Trees
+
+A Classification tree, also known as Decision tree, is built through a process known as binary recursive partitioning. This is an iterative process of splitting the data into partitions, and then splitting it up further on each of the branches. This approach is excellent when data does not have too many variables and the variables have a somewhat defined frontier between then.
+
+```{r bootstrap classification (decision) tree, echo = TRUE, warning = FALSE}
+set.seed(1, sample.kind = "Rounding")
+train_rpart<- train(diagnosis ~ ., 
+                    method = "rpart", 
+                    data = train_set, 
+                    tuneGrid = data.frame(cp = seq(0, 0.1, len = 1000)))
+```
+
+```{r plotting the decision tree cp x accuracy, echo = FALSE}
+plot(train_rpart)
+ggplot(train_rpart, aes(cp, Accuracy)) +
+  geom_line() +
+  annotate("point", train_rpart$results$cp[62], train_rpart$results$Accuracy[62], size=10, shape=21, fill="transparent", col = 'red')
+```
+
+```{r classification tree, echo = TRUE, warning = FALSE}
+y_hat <- predict(train_rpart, test_set)
+cm_ct <- confusionMatrix(y_hat, test_set$diagnosis)
+accuracy_ct <- cm_ct$overall[["Accuracy"]]
+sensitivity_ct <-cm_ct$byClass[["Sensitivity"]]
+specificity_ct <-cm_ct$byClass[["Specificity"]]
+```
+
+
+```{r classification tree results table, echo = FALSE}
+results_table <- rbind(results_table, 
+                       data.frame(Method = "classification (decision) tree", 
+                                  Accuracy = accuracy_ct,
+                                  Sensitivity  = sensitivity_ct,
+                                  Specificity = specificity_ct))
+results_table %>% knitr::kable()
+```
+
+
+### K-Nearest Neighbors
+
+In short, KNN attempts to classify each sample in a dataset by evaluating its distance from its nearest neighbors. If the nearest neighbors are mostly of one class, the sample in question will be classified in this category. The number of nearest neighbors are called k. But how do we pick the best k? The best number of nearest neighbors that maximize our accuracy? We test with a range of values and pick the best.
+
+Here is how:
+
+```{r downloading the purr package, echo = FALSE, warning = FALSE, include = FALSE}
+if(!require(purr)) install.packages("purrr")
+```
+
+```{r pick the k that maximizes accuracy using the estimates built on the test data, echo = TRUE, warning = FALSE}
+ks <- seq(1, 10)
+library(purrr)
+accuracy <- map_df(ks, function(k){
+  fit <- knn3(diagnosis ~ ., data = train_set, k = k)
+  
+  y_hat <- predict(fit, train_set, type = "class")
+  cm_train <- confusionMatrix(data = y_hat, reference = train_set$diagnosis)
+  train_error <- cm_train$overall["Accuracy"]
+  
+  y_hat <- predict(fit, test_set, type = "class")
+  cm_test <- confusionMatrix(data = y_hat, reference = test_set$diagnosis)
+  test_error <- cm_test$overall["Accuracy"]
+  
+  tibble(train = train_error, test = test_error)
+})
+```
+
+```{r pick the k that maximizes accuracy using the estimates built on the test data plot, echo = FALSE}
+accuracy_df <- data.frame(ks, accuracy)
+ggplot(accuracy_df, aes(ks, test)) + 
+  geom_point() + 
+  geom_line(lty = "dotted", color = "red") +
+  annotate("point", ks[which.max(accuracy$test)], max(accuracy$test), size=10, shape=21, fill="transparent", col = "red")
+```
+
+This shows that the number of neighbors that maximizes our accuracy is 7. When applied to the model the following results are produced.
+
+```{r k that maximizes accuracy and max accuracy, echo = FALSE, include = FALSE}
+ks[which.max(accuracy$test)]
+max(accuracy$test)
+```
+
+```{r applying the best k to the model to get the results}
+knn_fit <-knn3(diagnosis ~., train_set, k = ks[which.max(accuracy$test)])
+y_hat_knn <- predict(knn_fit, test_set, type = "class")
+cm_knn <- confusionMatrix(y_hat_knn, test_set$diagnosis)
+accuracy_knn <- cm_knn$overall[["Accuracy"]]
+sensitivity_knn <- cm_knn$byClass[["Sensitivity"]]
+specificity_knn <- cm_knn$byClass[["Specificity"]]
+```
+
+```{r knn results table, echo = FALSE}
+results_table <- rbind(results_table, 
+                      data.frame(Method = "K nearest neighbors", 
+                                 Accuracy = accuracy_knn,
+                                 Sensitivity  = sensitivity_knn,
+                                 Specificity = specificity_knn))
+results_table %>% knitr::kable()
+```
+
+```{r bootstrap knn, echo = FALSE, warning = FALSE, include = FALSE}
+library(caret)
+fit <- train(diagnosis ~ .,  method = "knn", 
+             tuneGrid = data.frame(k = seq(1, 30)), 
+             data = bcwdt_m)
+if(!require(caretEnsemble)) install.packages("caretEnsemble")
+library(caretEnsemble)
+bootstrap_knn_accuracy <- getMetric(fit)
+```
+Again, for comparison, when using the bootstrap approach (for reference visit [here](http://rafalab.dfci.harvard.edu/dsbook/cross-validation.html)) for K-nearest neighbors an lower accuracy of `r bootstrap_knn_accuracy` is produced.
+
+```{r bootstrap knn plot, echo = FALSE}
+ggplot(fit)  + 
+  geom_line(lty = "dotted", color = "red") +
+  annotate("point", 12, bootstrap_knn_accuracy, size=10, shape=21, fill="transparent", col = "red")
+```
+
+# Conclusion
+
+This project used three prediction models on a breast cancer diagnostic dataset by the University of Winsconsin. Surprisingly, all three models presented high accuracy, sensitivity and specificity. Two models best fitted the data with impressively the same accuracy, but k nearest neighbors had a higher sensitivity but a lower specificity.
+The models used in this project are based and do not required much computational power knowing the dataset contains 30 independent variables. More complex models could be applied to this project but are not viable to be produced in a home office machine.
+
+# References
+
+* http://rafalab.dfci.harvard.edu/dsbook/large-datasets.html
+* Wen Zhu, Nancy Zeng, Ning Wang. 2010. Sensitivity, Specificity, Accuracy, Associated Confidence Interval and ROC Analysis with Practical SAS Implementations https://lexjansen.com/nesug/nesug10/hl/hl07.pdf
+* https://select-statistics.co.uk/blog/analysing-categorical-data-using-logistic-regression-models/#:~:text=Logistic%20regression%20models%20are%20a,and%20plan%20for%20future%20scenarios.
+* https://www.solver.com/classification-tree
